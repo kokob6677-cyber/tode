@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>مشغل فيديو ديناميكي للهاتف</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+body {margin:0; background:#121212; font-family:sans-serif; color:#fff; display:flex; flex-direction:column; align-items:center; padding:10px;}
+.container {width:100%; max-width:900px; display:flex; flex-direction:column; gap:10px;}
+.video-wrapper {position:relative; width:100%; border-radius:12px; overflow:hidden; background:#000; display:flex; justify-content:center; align-items:center;}
+video {width:100%; height:60vh; object-fit:contain; border-radius:12px; transition:all 0.5s ease;}
+.controls {display:flex; flex-direction:column; gap:10px; margin-top:10px;}
+.controls label, .controls select, .controls button {font-size:16px; padding:10px; border-radius:8px; border:none; cursor:pointer;}
+.controls select, .controls button {background:#ff6b6b; color:#fff;}
+.controls select:hover, .controls button:hover {background:#ff8787;}
+.fullscreen-btn {background:#4CAF50;}
+
+/* أزرار overlay-controls (الثلاثة الخانات فقط) */
+.overlay-controls {position:absolute; top:10px; right:10px; display:flex; flex-direction:row; gap:10px; z-index:1000; padding:10px; border-radius:10px;}
+.overlay-controls button {
+    padding: 6px 8px;        /* حجم الزر */
+    font-size: 14px;         /* حجم الأيقونة */
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;      /* شكل دائري */
+    border: none;            /* إزالة الحدود */
+    background: transparent; /* شفافية كاملة */
+    color: #fff;             /* لون الأيقونة */
+    cursor: pointer;
+    box-shadow: none;
+    transition: transform 0.3s;
+}
+.overlay-controls button:hover {
+    transform: scale(1.2);   /* تكبير بسيط عند المرور */
+}
+.overlay-controls button.active {
+    animation: pulse 1s infinite;
+    box-shadow: 0 0 15px #ff8787; /* يظهر فقط عند الزر النشط */
+}
+@keyframes pulse {0%,100%{transform:scale(1.1);box-shadow:0 0 15px #ff8787;}50%{transform:scale(1.25);box-shadow:0 0 25px #ff8787;}}
+
+audio {display:none;}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2><i class="fas fa-video"></i> مشغل فيديو ديناميكي للهاتف</h2>
+
+  <div class="controls">
+    <label>اختر القناة:
+      <select id="videoSelector">
+        <option value="channel1">قناة تجريبية 1 - Big Buck Bunny</option>
+        <option value="channel2">قناة تجريبية 2 - Apple Live</option>
+      </select>
+    </label>
+    <label>اختر الجودة:
+      <select id="qualitySelector">
+        <option value="auto">تلقائي</option>
+      </select>
+    </label>
+    <button id="fullscreenBtn" class="fullscreen-btn"><i class="fas fa-expand"></i> ملء الشاشة</button>
+  </div>
+
+  <div class="video-wrapper" id="videoWrapper">
+    <video id="video" autoplay controls controlsList="nofullscreen"></video>
+
+    <div class="overlay-controls" id="fullscreenOverlay">
+      <button data-audio="audio1" class="audioBtn">🎧1</button>
+      <button data-audio="audio2" class="audioBtn">🎧2</button>
+      <button id="videoFitBtn">📐</button>
+    </div>
+  </div>
+</div>
+
+<audio id="audio1" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" loop></audio>
+<audio id="audio2" src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" loop></audio>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+const video=document.getElementById('video');
+const videoWrapper=document.getElementById('videoWrapper');
+const videoSelector=document.getElementById('videoSelector');
+const qualitySelector=document.getElementById('qualitySelector');
+const fullscreenBtn=document.getElementById('fullscreenBtn'); // تم الإبقاء على التعريف
+
+const overlayButtons=document.querySelectorAll('#fullscreenOverlay button');
+const videoFitBtn=document.getElementById('videoFitBtn');
+
+const audio1=document.getElementById('audio1');
+const audio2=document.getElementById('audio2');
+const audioButtons=document.querySelectorAll('.audioBtn');
+
+let fitModes=[
+  {icon:'📐', style:{objectFit:'contain', width:'100%', height:'100%'}},
+  {icon:'🔲', style:{objectFit:'cover', width:'100%', height:'100%'}},
+  {icon:'🖥️', style:{objectFit:'fill', width:'100%', height:'100%'}},
+  {icon:'▭', style:{objectFit:'contain', width:'100%', height:'auto'}},
+  {icon:'🔄', style:{objectFit:'contain', width:'100%', height:'auto'}}
+];
+let currentFitIndex=0;
+
+const channels={
+  channel1:"https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+  channel2:"https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8"
+};
+
+let hls=null;
+function initHLS(src){
+  if(hls) hls.destroy();
+  if(Hls.isSupported()){
+    hls=new Hls();
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, ()=>{updateQualitySelector();});
+  } else if(video.canPlayType('application/vnd.apple.mpegurl')){
+    video.src=src;
+  }
+}
+
+function updateQualitySelector(){
+  qualitySelector.innerHTML='<option value="auto">تلقائي</option>';
+  if(hls && hls.levels && hls.levels.length>0){
+    hls.levels.forEach((level,index)=>{
+      let resolution=level.height?level.height+'p':Math.round(level.bitrate/1000)+' kbps';
+      const opt=document.createElement('option');
+      opt.value=index; opt.textContent=resolution;
+      qualitySelector.appendChild(opt);
+    });
+  }
+}
+
+// Video Selector
+videoSelector.addEventListener('change',()=>{initHLS(channels[videoSelector.value]);});
+
+// Quality Selector
+qualitySelector.addEventListener('change',()=>{
+  if(hls){
+    hls.currentLevel=(qualitySelector.value==='auto')?-1:parseInt(qualitySelector.value);
+  }
+});
+
+// Fullscreen - بقي الكود ليعمل الزر اليدوي
+fullscreenBtn.addEventListener('click',()=>{
+  if(videoWrapper.requestFullscreen){videoWrapper.requestFullscreen();}
+  else if(videoWrapper.webkitRequestFullscreen){videoWrapper.webkitRequestFullscreen();}
+});
+
+// Video Fit
+videoFitBtn.addEventListener('click', ()=>{
+  currentFitIndex=(currentFitIndex+1)%fitModes.length;
+  const fit=fitModes[currentFitIndex].style;
+  video.style.width=fit.width; video.style.height=fit.height; video.style.objectFit=fit.objectFit;
+  videoFitBtn.textContent=fitModes[currentFitIndex].icon;
+});
+
+// Audio toggle
+function toggleAudio(btn){
+  // إيقاف أي صوت آخر
+  audioButtons.forEach(b=>{
+    const a=document.getElementById(b.dataset.audio);
+    if(b!==btn && !a.paused){
+      a.pause();
+      b.classList.remove('active');
+      b.textContent='🎧'+b.dataset.audio.slice(-1);
+    }
+  });
+  const audio=document.getElementById(btn.dataset.audio);
+  if(audio.paused){ audio.play(); btn.classList.add('active'); btn.textContent='⏸️';}
+  else{ audio.pause(); btn.classList.remove('active'); btn.textContent='🎧'+btn.dataset.audio.slice(-1);}
+}
+
+// ربط التعليقات الصوتية بشكل مضمون داخل Fullscreen
+function setupAudioButtons(){
+    audioButtons.forEach(btn=>{
+        btn.onclick = ()=>{
+            toggleAudio(btn);
+        };
+    });
+}
+setupAudioButtons();
+document.addEventListener('fullscreenchange', ()=>{
+    if(document.fullscreenElement) setupAudioButtons();
+});
+
+// Init HLS
+initHLS(channels.channel1);
+</script>
+</body>
+</html>
